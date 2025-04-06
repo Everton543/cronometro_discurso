@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Cronômetro</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex-direction: column;
+      height: 100vh;
+      background-color: green;
+      color: white;
+      font-size: 100px;
+      transition: background-color 0.5s;
+    }
+
+    #controle {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+    }
+
+    #codigoForm {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #codigoInput {
+      font-size: 18px;
+      padding: 4px;
+    }
+
+    #botaoEntrar {
+      font-size: 16px;
+      padding: 5px 10px;
+    }
+
+    #cronometro {
+      margin-top: 50px;
+    }
+  </style>
+</head>
+<body>
+  <div id="controle">
+    <form id="codigoForm">
+      <input type="text" id="codigoInput" placeholder="Digite o código" required />
+      <button type="submit" id="botaoEntrar">Entrar</button>
+    </form>
+  </div>
+
+  <div id="cronometro">00:00</div>
+  <div id="avisoFinal" class="mt-4 fw-bold text-center text-danger d-none" style="font-size: 28px; display:none;">
+    O tempo acabou. O discursante já deveria ter encerrado.
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script>
+    const socket = io();
+
+    const codigoForm = document.getElementById('codigoForm');
+    const codigoInput = document.getElementById('codigoInput');
+    const cronometroEl = document.getElementById('cronometro');
+    const controleDiv = document.getElementById('controle');
+
+    let tempoRestante = 0;
+    let cronometroInterval;
+    let codigoAtual = '';
+    let jaAvisouAoControle = false;
+
+    function salvarUltimoCodigo(cod) {
+      localStorage.setItem('ultimoCodigoDiscurso', cod);
+    }
+
+    function obterUltimoCodigo() {
+      return localStorage.getItem('ultimoCodigoDiscurso');
+    }
+
+    $('#codigoForm').on('submit', function (e) {
+      e.preventDefault();
+
+      const codigo = $('#codigoInput').val().trim();
+      if (!codigo) {
+        alert('Digite um código válido!');
+        return;
+      }
+
+      socket.emit('entrar-codigo', codigo, (res) => {
+        if (!res.sucesso) {
+          alert(res.erro);
+          return;
+        }
+
+        codigoAtual = codigo;
+        salvarUltimoCodigo(codigo);
+        $('#codigoForm').hide();
+      });
+    });
+
+    $(document).ready(() => {
+      const ultimoCodigo = obterUltimoCodigo();
+      if (ultimoCodigo) {
+        fetch(`/verificar-codigo/${ultimoCodigo}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.existe) {
+              socket.emit('entrar-codigo', ultimoCodigo, (res) => {
+                if (res.sucesso) {
+                  codigoAtual = ultimoCodigo;
+                  $('#codigoForm').hide();
+                }
+              });
+            }
+          });
+      }
+    });
+
+
+    function formatarTempo(seg) {
+      const abs = Math.abs(seg);
+      const min = String(Math.floor(abs / 60)).padStart(2, '0');
+      const s = String(abs % 60).padStart(2, '0');
+      return (seg < 0 ? '-' : '') + `${min}:${s}`;
+    }
+
+    function atualizarCor(seg) {
+      if (seg <= 0) {
+        document.body.style.backgroundColor = 'black';
+        document.body.style.color = 'white';
+      }else if (seg <= 60) {
+        document.body.style.backgroundColor = 'red';
+        document.body.style.color = 'white';
+      } else if (seg <= 300) {
+        document.body.style.backgroundColor = 'yellow';
+        document.body.style.color = 'black';
+      } else {
+        document.body.style.backgroundColor = 'green';
+        document.body.style.color = 'white';
+      }
+    }
+
+    socket.on('iniciar-cronometro', ({ tempo }) => {
+      $("#avisoFinal").hide();
+      clearInterval(cronometroInterval);
+      tempoRestante = tempo * 60;
+      jaAvisouAoControle = false;
+
+      cronometroInterval = setInterval(() => {
+        cronometroEl.innerText = formatarTempo(tempoRestante);
+        atualizarCor(tempoRestante);
+
+        if (tempoRestante === 300) {
+          socket.emit('mensagem', { codigo: codigoAtual, msg: 'Faltam 5 minutos!' });
+        }
+        if (tempoRestante === 60) {
+          socket.emit('mensagem', { codigo: codigoAtual, msg: 'Falta 1 minuto!' });
+        }
+
+        tempoRestante--;
+        if (tempoRestante < 0 && !jaAvisouAoControle) {
+          jaAvisouAoControle = true;
+          const aviso = "O tempo acabou. O discursante já deveria ter encerrado.";
+          $("#avisoFinal").show();
+          socket.emit('mensagem', { codigo: codigoAtual, msg: aviso });
+        }
+      }, 1000);
+    });
+
+    socket.on('parar-cronometro', () => {
+      clearInterval(cronometroInterval);
+      jaAvisouAoControle = false;
+      socket.emit('tempo-final', { codigo: codigoAtual, tempo: formatarTempo(tempoRestante) });
+    });
+  </script>
+</body>
+</html>
